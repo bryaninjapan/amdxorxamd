@@ -107,6 +107,11 @@ def main():
         if not run_step("生成分析报告", "generate_reports", "main"):
             print("\n报告生成失败")
             success = False
+        
+        # 生成合并报告（月度模式 + 周度模式）
+        if not run_step("生成合并报告", "export_combined_report", "main"):
+            print("\n合并报告生成失败")
+            success = False
     
     # 完成
     print("\n" + "=" * 60)

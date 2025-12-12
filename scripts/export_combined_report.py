@@ -1,6 +1,6 @@
 """
-周度模式数据导出脚本
-导出周度模式（7字母模式）数据到Excel
+合并导出脚本
+将月度模式分析和周度模式分析合并到同一个Excel文件
 """
 
 import sqlite3
@@ -38,6 +38,11 @@ def style_data_cells(ws, start_row=2):
         bottom=Side(style='thin')
     )
     
+    # 月度模式颜色
+    amdx_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    xamd_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    
+    # 周度模式颜色
     xamdxam_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     amdxamd_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     
@@ -46,7 +51,13 @@ def style_data_cells(ws, start_row=2):
             cell.alignment = data_alignment
             cell.border = thin_border
             
-            if cell.value == 'XAMDXAM':
+            # 月度模式样式
+            if cell.value == 'AMDX':
+                cell.fill = amdx_fill
+            elif cell.value == 'XAMD':
+                cell.fill = xamd_fill
+            # 周度模式样式
+            elif cell.value == 'XAMDXAM':
                 cell.fill = xamdxam_fill
             elif cell.value == 'AMDXAMD':
                 cell.fill = amdxamd_fill
@@ -74,21 +85,199 @@ def auto_adjust_column_width(ws):
         ws.column_dimensions[column_letter].width = adjusted_width
 
 
-def export_weekly_patterns_to_excel(conn):
-    """导出周度模式数据到Excel"""
+def get_xamd_from_monthly_pattern(pattern_str, week_of_month):
+    """
+    根据月度模式表的pattern字符串和月内第几周
+    转换为X/A/M/D走势
+    """
+    if 1 <= week_of_month <= 4 and len(pattern_str) == 4:
+        return pattern_str[week_of_month - 1]
+    return ''
+
+
+def export_combined_report(conn):
+    """导出合并报告（月度模式 + 周度模式）"""
     print("=" * 60)
-    print("导出周度模式数据到Excel")
+    print("导出合并报告（月度模式 + 周度模式）")
     print("=" * 60)
     
     excel_dir = os.path.join(REPORTS_DIR, 'excel')
     os.makedirs(excel_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    excel_path = os.path.join(excel_dir, f'周度模式分析_{timestamp}.xlsx')
+    excel_path = os.path.join(excel_dir, f'完整分析报告_{timestamp}.xlsx')
     
     with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-        # ========== 工作表1: 总体汇总 ==========
-        print("生成工作表: 总体汇总...")
+        # ==================== 第一部分：月度模式分析 ====================
+        print("\n【月度模式分析】")
+        
+        # 工作表1: 月度模式_总体汇总
+        print("生成工作表: 月度模式_总体汇总...")
+        query = """
+            SELECT 
+                s.symbol as '交易对',
+                COUNT(*) as '总月数',
+                SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1 ELSE 0 END) as 'AMDX次数',
+                SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1 ELSE 0 END) as 'XAMD次数',
+                ROUND(SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'AMDX占比(%)',
+                ROUND(SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'XAMD占比(%)',
+                MIN(mp.year || '-' || printf('%02d', mp.month)) as '数据起始月',
+                MAX(mp.year || '-' || printf('%02d', mp.month)) as '数据结束月'
+            FROM monthly_patterns mp
+            JOIN symbols s ON mp.symbol_id = s.id
+            GROUP BY s.symbol
+        """
+        df = pd.read_sql_query(query, conn)
+        df.to_excel(writer, sheet_name='月度模式_总体汇总', index=False)
+        ws = writer.sheets['月度模式_总体汇总']
+        style_excel_header(ws)
+        style_data_cells(ws)
+        auto_adjust_column_width(ws)
+        
+        # 工作表2: 月度模式_年度汇总
+        print("生成工作表: 月度模式_年度汇总...")
+        query = """
+            SELECT 
+                s.symbol as '交易对',
+                mp.year as '年份',
+                COUNT(*) as '总月数',
+                SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1 ELSE 0 END) as 'AMDX次数',
+                SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1 ELSE 0 END) as 'XAMD次数',
+                ROUND(SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'AMDX占比(%)',
+                ROUND(SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'XAMD占比(%)',
+                SUM(CASE WHEN mp.is_breakout_up = 1 THEN 1 ELSE 0 END) as '向上突破次数',
+                SUM(CASE WHEN mp.is_breakout_down = 1 THEN 1 ELSE 0 END) as '向下突破次数',
+                ROUND(AVG(CASE WHEN mp.breakout_up_percent IS NOT NULL THEN mp.breakout_up_percent END), 2) as '平均向上突破幅度(%)',
+                ROUND(AVG(CASE WHEN mp.breakout_down_percent IS NOT NULL THEN mp.breakout_down_percent END), 2) as '平均向下突破幅度(%)'
+            FROM monthly_patterns mp
+            JOIN symbols s ON mp.symbol_id = s.id
+            GROUP BY s.symbol, mp.year
+            ORDER BY s.symbol, mp.year
+        """
+        df = pd.read_sql_query(query, conn)
+        df.to_excel(writer, sheet_name='月度模式_年度汇总', index=False)
+        ws = writer.sheets['月度模式_年度汇总']
+        style_excel_header(ws)
+        style_data_cells(ws)
+        auto_adjust_column_width(ws)
+        
+        # 工作表3: BTC月份分布统计
+        print("生成工作表: BTC月份分布统计...")
+        query = """
+            SELECT 
+                mp.month as '月份',
+                COUNT(*) as '总月数',
+                SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1 ELSE 0 END) as 'AMDX次数',
+                SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1 ELSE 0 END) as 'XAMD次数',
+                ROUND(SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'AMDX占比(%)',
+                ROUND(SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'XAMD占比(%)'
+            FROM monthly_patterns mp
+            JOIN symbols s ON mp.symbol_id = s.id
+            WHERE s.symbol = 'BTCUSDT'
+            GROUP BY mp.month
+            ORDER BY mp.month
+        """
+        df = pd.read_sql_query(query, conn)
+        df.to_excel(writer, sheet_name='BTC月份分布统计', index=False)
+        ws = writer.sheets['BTC月份分布统计']
+        style_excel_header(ws)
+        style_data_cells(ws)
+        auto_adjust_column_width(ws)
+        
+        # 工作表4: ETH月份分布统计
+        print("生成工作表: ETH月份分布统计...")
+        query = """
+            SELECT 
+                mp.month as '月份',
+                COUNT(*) as '总月数',
+                SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1 ELSE 0 END) as 'AMDX次数',
+                SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1 ELSE 0 END) as 'XAMD次数',
+                ROUND(SUM(CASE WHEN mp.pattern = 'AMDX' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'AMDX占比(%)',
+                ROUND(SUM(CASE WHEN mp.pattern = 'XAMD' THEN 1.0 ELSE 0 END) * 100.0 / COUNT(*), 1) as 'XAMD占比(%)'
+            FROM monthly_patterns mp
+            JOIN symbols s ON mp.symbol_id = s.id
+            WHERE s.symbol = 'ETHUSDT'
+            GROUP BY mp.month
+            ORDER BY mp.month
+        """
+        df = pd.read_sql_query(query, conn)
+        df.to_excel(writer, sheet_name='ETH月份分布统计', index=False)
+        ws = writer.sheets['ETH月份分布统计']
+        style_excel_header(ws)
+        style_data_cells(ws)
+        auto_adjust_column_width(ws)
+        
+        # 工作表5-6: BTCUSDT_周数据 和 ETHUSDT_周数据（带走势列）
+        symbols_query = "SELECT id, symbol FROM symbols WHERE is_active = 1"
+        symbols_df = pd.read_sql_query(symbols_query, conn)
+        
+        monthly_patterns_query = """
+            SELECT 
+                symbol_id,
+                year,
+                month,
+                pattern
+            FROM monthly_patterns
+        """
+        monthly_patterns_df = pd.read_sql_query(monthly_patterns_query, conn)
+        
+        for _, row in symbols_df.iterrows():
+            symbol_id = row['id']
+            symbol = row['symbol']
+            
+            print(f"生成工作表: {symbol}_周数据...")
+            query = """
+                SELECT 
+                    week_start as '周开始时间',
+                    week_end as '周结束时间',
+                    year as '年份',
+                    month as '月份',
+                    week_of_year as '年内第几周',
+                    week_of_month as '月内第几周',
+                    week_high as '周最高价',
+                    week_low as '周最低价',
+                    week_open as '周开盘价',
+                    week_close as '周收盘价',
+                    data_points as '数据点数',
+                    data_quality_score as '数据质量分数'
+                FROM weekly_data
+                WHERE symbol_id = ?
+                ORDER BY week_start
+            """
+            df = pd.read_sql_query(query, conn, params=(symbol_id,))
+            
+            # 根据月度模式表计算X/A/M/D走势
+            xamd_patterns = []
+            for idx, row_data in df.iterrows():
+                week_of_month = row_data['月内第几周']
+                year = row_data['年份']
+                month = row_data['月份']
+                if 1 <= week_of_month <= 4:
+                    monthly_pattern = monthly_patterns_df[
+                        (monthly_patterns_df['symbol_id'] == symbol_id) &
+                        (monthly_patterns_df['year'] == year) &
+                        (monthly_patterns_df['month'] == month)
+                    ]
+                    if len(monthly_pattern) > 0:
+                        pattern_str = monthly_pattern.iloc[0]['pattern']
+                        xamd_patterns.append(get_xamd_from_monthly_pattern(pattern_str, week_of_month))
+                    else:
+                        xamd_patterns.append('')
+                else:
+                    xamd_patterns.append('')
+            
+            df.insert(df.columns.get_loc('月内第几周') + 1, '走势', xamd_patterns)
+            df.to_excel(writer, sheet_name=f'{symbol}_周数据', index=False)
+            ws = writer.sheets[f'{symbol}_周数据']
+            style_excel_header(ws)
+            style_data_cells(ws)
+            auto_adjust_column_width(ws)
+        
+        # ==================== 第二部分：周度模式分析 ====================
+        print("\n【周度模式分析】")
+        
+        # 工作表: 周度模式_总体汇总
+        print("生成工作表: 周度模式_总体汇总...")
         query = """
             SELECT 
                 s.symbol as '交易对',
@@ -104,14 +293,14 @@ def export_weekly_patterns_to_excel(conn):
             GROUP BY s.symbol
         """
         df = pd.read_sql_query(query, conn)
-        df.to_excel(writer, sheet_name='总体汇总', index=False)
-        ws = writer.sheets['总体汇总']
+        df.to_excel(writer, sheet_name='周度模式_总体汇总', index=False)
+        ws = writer.sheets['周度模式_总体汇总']
         style_excel_header(ws)
         style_data_cells(ws)
         auto_adjust_column_width(ws)
         
-        # ========== 工作表2: 年度汇总 ==========
-        print("生成工作表: 年度汇总...")
+        # 工作表: 周度模式_年度汇总
+        print("生成工作表: 周度模式_年度汇总...")
         query = """
             SELECT 
                 s.symbol as '交易对',
@@ -127,13 +316,13 @@ def export_weekly_patterns_to_excel(conn):
             ORDER BY s.symbol, wp.year
         """
         df = pd.read_sql_query(query, conn)
-        df.to_excel(writer, sheet_name='年度汇总', index=False)
-        ws = writer.sheets['年度汇总']
+        df.to_excel(writer, sheet_name='周度模式_年度汇总', index=False)
+        ws = writer.sheets['周度模式_年度汇总']
         style_excel_header(ws)
         style_data_cells(ws)
         auto_adjust_column_width(ws)
         
-        # ========== 工作表3: BTC周度详细 ==========
+        # 工作表: BTC周度详细
         print("生成工作表: BTC周度详细...")
         query = """
             SELECT 
@@ -175,7 +364,7 @@ def export_weekly_patterns_to_excel(conn):
         style_data_cells(ws)
         auto_adjust_column_width(ws)
         
-        # ========== 工作表4: ETH周度详细 ==========
+        # 工作表: ETH周度详细
         print("生成工作表: ETH周度详细...")
         query = """
             SELECT 
@@ -217,7 +406,7 @@ def export_weekly_patterns_to_excel(conn):
         style_data_cells(ws)
         auto_adjust_column_width(ws)
         
-        # ========== 工作表5: 日数据(BTC) ==========
+        # 工作表: BTC日数据
         print("生成工作表: BTC日数据...")
         query = """
             SELECT 
@@ -291,7 +480,7 @@ def export_weekly_patterns_to_excel(conn):
         style_data_cells(ws)
         auto_adjust_column_width(ws)
         
-        # ========== 工作表6: 日数据(ETH) ==========
+        # 工作表: ETH日数据
         print("生成工作表: ETH日数据...")
         query = """
             SELECT 
@@ -365,13 +554,17 @@ def export_weekly_patterns_to_excel(conn):
         style_data_cells(ws)
         auto_adjust_column_width(ws)
     
-    print(f"\n周度模式报告已保存: {excel_path}")
+    print(f"\n合并报告已保存: {excel_path}")
     
     # 同时保存最新版本
-    latest_path = os.path.join(excel_dir, '周度模式分析_最新.xlsx')
+    latest_path = os.path.join(excel_dir, '完整分析报告_最新.xlsx')
     import shutil
     shutil.copy(excel_path, latest_path)
     print(f"最新版本已保存: {latest_path}")
+    
+    print("\n" + "=" * 60)
+    print("合并报告导出完成!")
+    print("=" * 60)
     
     return excel_path
 
@@ -379,31 +572,8 @@ def export_weekly_patterns_to_excel(conn):
 def main():
     """主函数"""
     conn = sqlite3.connect(DATABASE_PATH)
-    
     try:
-        # 检查数据是否存在
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM weekly_patterns")
-        count = cursor.fetchone()[0]
-        
-        if count == 0:
-            print("警告: 数据库中没有周度模式数据，请先运行:")
-            print("  1. python scripts/fetch_daily_data.py")
-            print("  2. python scripts/calculate_weekly_patterns.py")
-            return
-        
-        print(f"数据库中有 {count} 条周度模式记录")
-        
-        export_weekly_patterns_to_excel(conn)
-        
-        print("\n" + "=" * 60)
-        print("周度模式数据导出完成!")
-        print("=" * 60)
-        
-    except Exception as e:
-        print(f"\n错误: {e}")
-        import traceback
-        traceback.print_exc()
+        export_combined_report(conn)
     finally:
         conn.close()
 
