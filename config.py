@@ -21,6 +21,9 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 BINANCE_API_BASE = 'https://api.binance.com/api/v3'
 BINANCE_FUTURES_API_BASE = 'https://fapi.binance.com/fapi/v1'
 
+# ==================== Bitstamp API 配置 ====================
+BITSTAMP_API_BASE = 'https://www.bitstamp.net/api/v2'
+
 # API请求间隔（秒），避免限流
 API_REQUEST_INTERVAL = 0.5
 
@@ -30,13 +33,22 @@ SYMBOLS = [
         'name': 'BTCUSDT',
         'display_name': 'BTC/USDT 永续合约',
         'api_symbol': 'BTCUSDT',
-        'use_futures': True
+        'use_futures': True,
+        'exchange': 'binance'
     },
     {
         'name': 'ETHUSDT', 
         'display_name': 'ETH/USDT 永续合约',
         'api_symbol': 'ETHUSDT',
-        'use_futures': True
+        'use_futures': True,
+        'exchange': 'binance'
+    },
+    {
+        'name': 'BTCUSD',
+        'display_name': 'BTC/USD 现货',
+        'api_symbol': 'btcusd',
+        'use_futures': False,
+        'exchange': 'bitstamp'
     }
 ]
 
