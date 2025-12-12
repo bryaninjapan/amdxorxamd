@@ -1,0 +1,94 @@
+# AMDX/XAMD 模式分析系统 - 每周自动更新工作流
+# 每周一早上9点(UTC+9)运行，即UTC时间每周日00:00
+
+name: Weekly Data Update
+
+on:
+  schedule:
+    # 每周日 00:00 UTC (= 周一 09:00 UTC+9)
+    - cron: '0 0 * * 0'
+  
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: '强制重新获取所有数据'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  TZ: 'Asia/Tokyo'
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Initialize database (if needed)
+        run: |
+          python scripts/init_database.py
+      
+      - name: Fetch data from Binance
+        run: |
+          if [ "${{ github.event.inputs.force_update }}" == "true" ]; then
+            python scripts/fetch_data.py --force
+          else
+            python scripts/fetch_data.py
+          fi
+      
+      - name: Calculate patterns
+        run: |
+          python scripts/calculate_patterns.py
+      
+      - name: Generate reports
+        run: |
+          python scripts/generate_reports.py
+      
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 添加所有更改的文件
+          git add database/
+          git add reports/
+          git add data/
+          
+          # 检查是否有更改
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "📊 Weekly data update - $(date +'%Y-%m-%d')"
+            git push
+          fi
+      
+      - name: Upload reports as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-reports-${{ github.run_number }}
+          path: |
+            reports/excel/*.xlsx
+            reports/pdf/*.pdf
+            reports/data/*.json
+          retention-days: 30
+

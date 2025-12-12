@@ -1,0 +1,100 @@
+# AMDX/XAMD 模式分析系统 - 手动更新工作流
+# 用于手动触发数据更新
+
+name: Manual Data Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '选择要执行的操作'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full          # 完整更新（获取数据+计算模式+生成报告）
+          - fetch_only    # 只获取数据
+          - calculate_only # 只计算模式
+          - report_only   # 只生成报告
+      force_fetch:
+        description: '强制重新获取所有历史数据'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TZ: 'Asia/Tokyo'
+
+jobs:
+  manual-update:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Initialize database
+        run: |
+          python scripts/init_database.py
+      
+      - name: Fetch data from Binance
+        if: ${{ github.event.inputs.action == 'full' || github.event.inputs.action == 'fetch_only' }}
+        run: |
+          if [ "${{ github.event.inputs.force_fetch }}" == "true" ]; then
+            python scripts/fetch_data.py --force
+          else
+            python scripts/fetch_data.py
+          fi
+      
+      - name: Calculate patterns
+        if: ${{ github.event.inputs.action == 'full' || github.event.inputs.action == 'calculate_only' }}
+        run: |
+          python scripts/calculate_patterns.py
+      
+      - name: Generate reports
+        if: ${{ github.event.inputs.action == 'full' || github.event.inputs.action == 'report_only' }}
+        run: |
+          python scripts/generate_reports.py
+      
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add database/
+          git add reports/
+          git add data/
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "📊 Manual update (${{ github.event.inputs.action }}) - $(date +'%Y-%m-%d %H:%M')"
+            git push
+          fi
+      
+      - name: Upload reports as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-reports-${{ github.run_number }}
+          path: |
+            reports/excel/*.xlsx
+            reports/pdf/*.pdf
+            reports/data/*.json
+          retention-days: 30
+

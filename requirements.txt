@@ -1,0 +1,28 @@
+# AMDX/XAMD 模式分析系统依赖
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 时区处理
+pytz>=2023.3
+
+# API请求
+requests>=2.31.0
+
+# 数据库
+# SQLite是Python内置的，不需要额外安装
+
+# Excel输出
+openpyxl>=3.1.2
+
+# PDF输出
+reportlab>=4.0.0
+matplotlib>=3.7.0
+
+# 日志
+colorama>=0.4.6
+
+# 开发工具（可选）
+python-dateutil>=2.8.2
+
