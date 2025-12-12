@@ -43,10 +43,7 @@ def main():
   python run_all.py                    # 运行所有步骤（增量更新）
   python run_all.py --force            # 强制重新获取所有数据
   python run_all.py --report           # 只生成报告
-  python run_all.py --predict          # 运行模式预测
-  python run_all.py --backtest         # 运行回测分析
   python run_all.py --bitstamp         # 获取Bitstamp数据
-  python run_all.py --force --predict --backtest  # 完整运行（含预测和回测）
         """
     )
     
@@ -60,10 +57,6 @@ def main():
                         help='只获取数据')
     parser.add_argument('--calculate', '-c', action='store_true',
                         help='只计算模式')
-    parser.add_argument('--predict', '-p', action='store_true',
-                        help='运行模式预测')
-    parser.add_argument('--backtest', '-b', action='store_true',
-                        help='运行回测分析')
     parser.add_argument('--bitstamp', action='store_true',
                         help='获取Bitstamp数据')
     
@@ -126,18 +119,6 @@ def main():
         # 生成合并报告（月度模式 + 周度模式）
         if not run_step("生成合并报告", "export_combined_report", "main"):
             print("\n合并报告生成失败")
-            success = False
-    
-    # 步骤5: 模式预测
-    if args.predict:
-        if not run_step("模式预测分析", "predict_patterns", "main"):
-            print("\n模式预测失败")
-            success = False
-    
-    # 步骤6: 回测分析
-    if args.backtest:
-        if not run_step("回测分析", "generate_backtest_reports", "main"):
-            print("\n回测分析失败")
             success = False
     
     # 完成
