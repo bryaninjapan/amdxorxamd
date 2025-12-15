@@ -95,6 +95,666 @@ def get_xamd_from_monthly_pattern(pattern_str, week_of_month):
     return ''
 
 
+def get_statistics_data(conn, symbol_name):
+    """获取统计数据"""
+    query = """
+        SELECT 
+            dd.year as '年份',
+            CASE 
+                WHEN wp.pattern IS NULL THEN 'N/A'
+                WHEN dd.day_of_week = 0 THEN SUBSTR(wp.pattern, 1, 1)
+                WHEN dd.day_of_week = 1 THEN SUBSTR(wp.pattern, 2, 1)
+                WHEN dd.day_of_week = 2 THEN SUBSTR(wp.pattern, 3, 1)
+                WHEN dd.day_of_week = 3 THEN SUBSTR(wp.pattern, 4, 1)
+                WHEN dd.day_of_week = 4 THEN SUBSTR(wp.pattern, 5, 1)
+                WHEN dd.day_of_week = 5 THEN SUBSTR(wp.pattern, 6, 1)
+                WHEN dd.day_of_week = 6 THEN SUBSTR(wp.pattern, 7, 1)
+                ELSE 'N/A'
+            END as '周度模式',
+            CASE dd.day_of_week
+                WHEN 0 THEN COALESCE(wp.monday_trend_detail, 'N/A')
+                WHEN 1 THEN COALESCE(wp.tuesday_trend_detail, 'N/A')
+                WHEN 2 THEN COALESCE(wp.wednesday_trend_detail, 'N/A')
+                WHEN 3 THEN COALESCE(wp.thursday_trend_detail, 'N/A')
+                WHEN 4 THEN COALESCE(wp.friday_trend_detail, 'N/A')
+                WHEN 5 THEN COALESCE(wp.saturday_trend_detail, 'N/A')
+                WHEN 6 THEN COALESCE(wp.sunday_trend_detail, 'N/A')
+            END as '走势明细'
+        FROM daily_data dd
+        LEFT JOIN weekly_patterns wp ON (
+            dd.symbol_id = wp.symbol_id 
+            AND dd.trade_date >= DATE(wp.week_start) 
+            AND dd.trade_date < DATE(wp.week_start, '+7 days')
+        )
+        WHERE dd.symbol_id = (SELECT id FROM symbols WHERE symbol = ?)
+        AND wp.pattern IS NOT NULL
+        AND CASE 
+            WHEN dd.day_of_week = 0 THEN SUBSTR(wp.pattern, 1, 1)
+            WHEN dd.day_of_week = 1 THEN SUBSTR(wp.pattern, 2, 1)
+            WHEN dd.day_of_week = 2 THEN SUBSTR(wp.pattern, 3, 1)
+            WHEN dd.day_of_week = 3 THEN SUBSTR(wp.pattern, 4, 1)
+            WHEN dd.day_of_week = 4 THEN SUBSTR(wp.pattern, 5, 1)
+            WHEN dd.day_of_week = 5 THEN SUBSTR(wp.pattern, 6, 1)
+            WHEN dd.day_of_week = 6 THEN SUBSTR(wp.pattern, 7, 1)
+        END IN ('A', 'M', 'D', 'X')
+        ORDER BY dd.year, dd.trade_date
+    """
+    
+    df = pd.read_sql_query(query, conn, params=(symbol_name,))
+    return df
+
+
+def get_daily_data_with_pattern(conn, symbol_name):
+    """获取日数据，包含日期、周度模式、走势明细、年份"""
+    query = """
+        SELECT 
+            dd.trade_date as '日期',
+            dd.year as '年份',
+            CASE 
+                WHEN wp.pattern IS NULL THEN 'N/A'
+                WHEN dd.day_of_week = 0 THEN SUBSTR(wp.pattern, 1, 1)
+                WHEN dd.day_of_week = 1 THEN SUBSTR(wp.pattern, 2, 1)
+                WHEN dd.day_of_week = 2 THEN SUBSTR(wp.pattern, 3, 1)
+                WHEN dd.day_of_week = 3 THEN SUBSTR(wp.pattern, 4, 1)
+                WHEN dd.day_of_week = 4 THEN SUBSTR(wp.pattern, 5, 1)
+                WHEN dd.day_of_week = 5 THEN SUBSTR(wp.pattern, 6, 1)
+                WHEN dd.day_of_week = 6 THEN SUBSTR(wp.pattern, 7, 1)
+                ELSE 'N/A'
+            END as '周度模式',
+            CASE dd.day_of_week
+                WHEN 0 THEN COALESCE(wp.monday_trend_detail, 'N/A')
+                WHEN 1 THEN COALESCE(wp.tuesday_trend_detail, 'N/A')
+                WHEN 2 THEN COALESCE(wp.wednesday_trend_detail, 'N/A')
+                WHEN 3 THEN COALESCE(wp.thursday_trend_detail, 'N/A')
+                WHEN 4 THEN COALESCE(wp.friday_trend_detail, 'N/A')
+                WHEN 5 THEN COALESCE(wp.saturday_trend_detail, 'N/A')
+                WHEN 6 THEN COALESCE(wp.sunday_trend_detail, 'N/A')
+            END as '走势明细'
+        FROM daily_data dd
+        LEFT JOIN weekly_patterns wp ON (
+            dd.symbol_id = wp.symbol_id 
+            AND dd.trade_date >= DATE(wp.week_start) 
+            AND dd.trade_date < DATE(wp.week_start, '+7 days')
+        )
+        WHERE dd.symbol_id = (SELECT id FROM symbols WHERE symbol = ?)
+        AND wp.pattern IS NOT NULL
+        ORDER BY dd.trade_date
+    """
+    
+    df = pd.read_sql_query(query, conn, params=(symbol_name,))
+    df['日期'] = pd.to_datetime(df['日期'])
+    return df
+
+
+def calculate_consecutive_stats(df):
+    """计算连续2天的统计"""
+    from datetime import timedelta
+    
+    # 初始化统计字典（基础统计）
+    stats = {
+        'D_X_向上突破': {},      # D和X连续2天，都是"向上突破"
+        'D_X_向下突破': {},      # D和X连续2天，都是"向下突破"
+        'D_X_反方向': {},        # D→X连续反方向统计
+        'D弱_X强': {},           # D弱→X强方向统计
+        'X_A_在区间内': {},      # X→A连续，A为"在区间内"
+        'X弱_A强': {}            # X弱→A强方向统计
+    }
+    
+    # 初始化详细统计字典
+    detailed_stats = {
+        # D→X连续（同方向）
+        'D上_X上': {},           # D为[向上突破]时，X为[向上突破]
+        'D下_X下': {},           # D为[向下突破]时，X为[向下突破]
+        
+        # D→X连续反方向
+        'D上_X下': {},           # D为[向上突破]时，X为[向下突破]
+        'D上_X区间': {},         # D为[向上突破]时，X为[在区间内]
+        'D下_X上': {},           # D为[向下突破]时，X为[向上突破]
+        'D下_X区间': {},         # D为[向下突破]时，X为[在区间内]
+        
+        # D弱→X强
+        'D区间_X上': {},         # D为[在区间内]时，X为[向上突破]
+        'D区间_X下': {},         # D为[在区间内]时，X为[向下突破]
+        
+        # X→A连续
+        'X上_A区间': {},         # X为"向上突破"时，A为"在区间内"
+        'X下_A区间': {},         # X为"向下突破"时，A为"在区间内"
+        'X双_A区间': {},         # X为"同时向上和向下突破"时，A为"在区间内"
+        
+        # X弱→A强
+        'X上_A双': {},           # X为[向上突破]时，A为[同时向上和向下突破]
+        'X下_A双': {}            # X为[向下突破]时，A为[同时向上和向下突破]
+    }
+    
+    # 按日期排序
+    df_sorted = df.sort_values('日期').reset_index(drop=True)
+    
+    # 遍历所有相邻的两天
+    for i in range(len(df_sorted) - 1):
+        today = df_sorted.iloc[i]
+        tomorrow = df_sorted.iloc[i + 1]
+        
+        # 检查是否连续（相差1天）
+        if (tomorrow['日期'] - today['日期']).days != 1:
+            continue
+        
+        year = today['年份']
+        today_pattern = today['周度模式']
+        today_trend = today['走势明细']
+        tomorrow_pattern = tomorrow['周度模式']
+        tomorrow_trend = tomorrow['走势明细']
+        
+        # 统计1: D和X连续2天，都是"向上突破"
+        if today_pattern == 'D' and tomorrow_pattern == 'X':
+            if today_trend == '向上突破' and tomorrow_trend == '向上突破':
+                if year not in stats['D_X_向上突破']:
+                    stats['D_X_向上突破'][year] = 0
+                stats['D_X_向上突破'][year] += 1
+                # 详细统计
+                if year not in detailed_stats['D上_X上']:
+                    detailed_stats['D上_X上'][year] = 0
+                detailed_stats['D上_X上'][year] += 1
+        
+        # 统计2: D和X连续2天，都是"向下突破"
+        if today_pattern == 'D' and tomorrow_pattern == 'X':
+            if today_trend == '向下突破' and tomorrow_trend == '向下突破':
+                if year not in stats['D_X_向下突破']:
+                    stats['D_X_向下突破'][year] = 0
+                stats['D_X_向下突破'][year] += 1
+                # 详细统计
+                if year not in detailed_stats['D下_X下']:
+                    detailed_stats['D下_X下'][year] = 0
+                detailed_stats['D下_X下'][year] += 1
+        
+        # 统计3: D→X连续反方向统计（详细分类）
+        if today_pattern == 'D' and tomorrow_pattern == 'X':
+            if today_trend == '向上突破' and tomorrow_trend == '向下突破':
+                if year not in stats['D_X_反方向']:
+                    stats['D_X_反方向'][year] = 0
+                stats['D_X_反方向'][year] += 1
+                if year not in detailed_stats['D上_X下']:
+                    detailed_stats['D上_X下'][year] = 0
+                detailed_stats['D上_X下'][year] += 1
+            elif today_trend == '向上突破' and tomorrow_trend == '在区间内':
+                if year not in stats['D_X_反方向']:
+                    stats['D_X_反方向'][year] = 0
+                stats['D_X_反方向'][year] += 1
+                if year not in detailed_stats['D上_X区间']:
+                    detailed_stats['D上_X区间'][year] = 0
+                detailed_stats['D上_X区间'][year] += 1
+            elif today_trend == '向下突破' and tomorrow_trend == '向上突破':
+                if year not in stats['D_X_反方向']:
+                    stats['D_X_反方向'][year] = 0
+                stats['D_X_反方向'][year] += 1
+                if year not in detailed_stats['D下_X上']:
+                    detailed_stats['D下_X上'][year] = 0
+                detailed_stats['D下_X上'][year] += 1
+            elif today_trend == '向下突破' and tomorrow_trend == '在区间内':
+                if year not in stats['D_X_反方向']:
+                    stats['D_X_反方向'][year] = 0
+                stats['D_X_反方向'][year] += 1
+                if year not in detailed_stats['D下_X区间']:
+                    detailed_stats['D下_X区间'][year] = 0
+                detailed_stats['D下_X区间'][year] += 1
+        
+        # 统计4: D弱→X强方向统计（详细分类）
+        if today_pattern == 'D' and tomorrow_pattern == 'X':
+            if today_trend == '在区间内' and tomorrow_trend == '向上突破':
+                if year not in stats['D弱_X强']:
+                    stats['D弱_X强'][year] = 0
+                stats['D弱_X强'][year] += 1
+                if year not in detailed_stats['D区间_X上']:
+                    detailed_stats['D区间_X上'][year] = 0
+                detailed_stats['D区间_X上'][year] += 1
+            elif today_trend == '在区间内' and tomorrow_trend == '向下突破':
+                if year not in stats['D弱_X强']:
+                    stats['D弱_X强'][year] = 0
+                stats['D弱_X强'][year] += 1
+                if year not in detailed_stats['D区间_X下']:
+                    detailed_stats['D区间_X下'][year] = 0
+                detailed_stats['D区间_X下'][year] += 1
+        
+        # 统计5: X→A连续（详细分类）
+        if today_pattern == 'X' and tomorrow_pattern == 'A':
+            if today_trend == '向上突破' and tomorrow_trend == '在区间内':
+                if year not in stats['X_A_在区间内']:
+                    stats['X_A_在区间内'][year] = 0
+                stats['X_A_在区间内'][year] += 1
+                if year not in detailed_stats['X上_A区间']:
+                    detailed_stats['X上_A区间'][year] = 0
+                detailed_stats['X上_A区间'][year] += 1
+            elif today_trend == '向下突破' and tomorrow_trend == '在区间内':
+                if year not in stats['X_A_在区间内']:
+                    stats['X_A_在区间内'][year] = 0
+                stats['X_A_在区间内'][year] += 1
+                if year not in detailed_stats['X下_A区间']:
+                    detailed_stats['X下_A区间'][year] = 0
+                detailed_stats['X下_A区间'][year] += 1
+            elif today_trend == '同时向上和向下突破' and tomorrow_trend == '在区间内':
+                if year not in stats['X_A_在区间内']:
+                    stats['X_A_在区间内'][year] = 0
+                stats['X_A_在区间内'][year] += 1
+                if year not in detailed_stats['X双_A区间']:
+                    detailed_stats['X双_A区间'][year] = 0
+                detailed_stats['X双_A区间'][year] += 1
+        
+        # 统计6: X弱→A强方向统计（详细分类）
+        if today_pattern == 'X' and tomorrow_pattern == 'A':
+            if today_trend == '向上突破' and tomorrow_trend == '同时向上和向下突破':
+                if year not in stats['X弱_A强']:
+                    stats['X弱_A强'][year] = 0
+                stats['X弱_A强'][year] += 1
+                if year not in detailed_stats['X上_A双']:
+                    detailed_stats['X上_A双'][year] = 0
+                detailed_stats['X上_A双'][year] += 1
+            elif today_trend == '向下突破' and tomorrow_trend == '同时向上和向下突破':
+                if year not in stats['X弱_A强']:
+                    stats['X弱_A强'][year] = 0
+                stats['X弱_A强'][year] += 1
+                if year not in detailed_stats['X下_A双']:
+                    detailed_stats['X下_A双'][year] = 0
+                detailed_stats['X下_A双'][year] += 1
+    
+    return stats, detailed_stats
+
+
+def create_statistics_sheets(conn, writer):
+    """创建统计工作表"""
+    print("\n【日统计】")
+    
+    # 周度模式的固定顺序
+    patterns = ['A', 'M', 'D', 'X']
+    # 年份范围
+    years = [2019, 2020, 2021, 2022, 2023, 2024, 2025]
+    
+    # 处理每个交易对
+    for symbol_name in ['BTCUSDT', 'ETHUSDT']:
+        print(f"生成工作表: {symbol_name}_日统计...")
+        
+        # 获取基础统计数据
+        df = get_statistics_data(conn, symbol_name)
+        
+        if df.empty:
+            print(f"  {symbol_name} 没有数据")
+            continue
+        
+        # 获取日数据用于连续统计
+        df_daily = get_daily_data_with_pattern(conn, symbol_name)
+        consecutive_stats, detailed_stats = calculate_consecutive_stats(df_daily)
+        
+        # 创建统计表
+        stats_data = []
+        
+        # 按年份统计
+        for year in years:
+            year_df = df[df['年份'] == year]
+            if year_df.empty:
+                continue
+            
+            for pattern in patterns:
+                pattern_df = year_df[year_df['周度模式'] == pattern]
+                if pattern_df.empty:
+                    continue
+                
+                row = {
+                    '年份': year,
+                    '周度模式': pattern,
+                    '向上突破': len(pattern_df[pattern_df['走势明细'] == '向上突破']),
+                    '向下突破': len(pattern_df[pattern_df['走势明细'] == '向下突破']),
+                    '在区间内': len(pattern_df[pattern_df['走势明细'] == '在区间内']),
+                    '同时向上和向下突破': len(pattern_df[pattern_df['走势明细'] == '同时向上和向下突破']),
+                    '总计': len(pattern_df)
+                }
+                stats_data.append(row)
+        
+        # 添加总计行（所有年份）
+        for pattern in patterns:
+            pattern_df = df[df['周度模式'] == pattern]
+            if pattern_df.empty:
+                continue
+            
+            row = {
+                '年份': '总计',
+                '周度模式': pattern,
+                '向上突破': len(pattern_df[pattern_df['走势明细'] == '向上突破']),
+                '向下突破': len(pattern_df[pattern_df['走势明细'] == '向下突破']),
+                '在区间内': len(pattern_df[pattern_df['走势明细'] == '在区间内']),
+                '同时向上和向下突破': len(pattern_df[pattern_df['走势明细'] == '同时向上和向下突破']),
+                '总计': len(pattern_df)
+            }
+            stats_data.append(row)
+        
+        # 添加连续统计行
+        for year in years + ['总计']:
+            if year == '总计':
+                d_x_up_total = sum(consecutive_stats['D_X_向上突破'].values())
+                d_x_down_total = sum(consecutive_stats['D_X_向下突破'].values())
+                d_x_reverse_total = sum(consecutive_stats['D_X_反方向'].values())
+                d_weak_x_strong_total = sum(consecutive_stats['D弱_X强'].values())
+                x_a_total = sum(consecutive_stats['X_A_在区间内'].values())
+                x_weak_a_strong_total = sum(consecutive_stats['X弱_A强'].values())
+            else:
+                d_x_up_total = consecutive_stats['D_X_向上突破'].get(year, 0)
+                d_x_down_total = consecutive_stats['D_X_向下突破'].get(year, 0)
+                d_x_reverse_total = consecutive_stats['D_X_反方向'].get(year, 0)
+                d_weak_x_strong_total = consecutive_stats['D弱_X强'].get(year, 0)
+                x_a_total = consecutive_stats['X_A_在区间内'].get(year, 0)
+                x_weak_a_strong_total = consecutive_stats['X弱_A强'].get(year, 0)
+            
+            # D→X连续（同方向）
+            if d_x_up_total > 0 or d_x_down_total > 0:
+                row = {
+                    '年份': year,
+                    '周度模式': 'D→X连续',
+                    '向上突破': d_x_up_total,
+                    '向下突破': d_x_down_total,
+                    '在区间内': 0,
+                    '同时向上和向下突破': 0,
+                    '总计': d_x_up_total + d_x_down_total
+                }
+                stats_data.append(row)
+            
+            # D→X连续反方向
+            if d_x_reverse_total > 0:
+                row = {
+                    '年份': year,
+                    '周度模式': 'D→X连续反方向',
+                    '向上突破': 0,
+                    '向下突破': 0,
+                    '在区间内': d_x_reverse_total,
+                    '同时向上和向下突破': 0,
+                    '总计': d_x_reverse_total
+                }
+                stats_data.append(row)
+            
+            # D弱→X强
+            if d_weak_x_strong_total > 0:
+                row = {
+                    '年份': year,
+                    '周度模式': 'D弱→X强',
+                    '向上突破': 0,
+                    '向下突破': 0,
+                    '在区间内': d_weak_x_strong_total,
+                    '同时向上和向下突破': 0,
+                    '总计': d_weak_x_strong_total
+                }
+                stats_data.append(row)
+            
+            # X→A连续（A在区间内）
+            if x_a_total > 0:
+                row = {
+                    '年份': year,
+                    '周度模式': 'X→A连续',
+                    '向上突破': 0,
+                    '向下突破': 0,
+                    '在区间内': x_a_total,
+                    '同时向上和向下突破': 0,
+                    '总计': x_a_total
+                }
+                stats_data.append(row)
+            
+            # X弱→A强
+            if x_weak_a_strong_total > 0:
+                row = {
+                    '年份': year,
+                    '周度模式': 'X弱→A强',
+                    '向上突破': 0,
+                    '向下突破': 0,
+                    '在区间内': 0,
+                    '同时向上和向下突破': x_weak_a_strong_total,
+                    '总计': x_weak_a_strong_total
+                }
+                stats_data.append(row)
+        
+        # 创建DataFrame
+        stats_df = pd.DataFrame(stats_data)
+        
+        # 写入Excel
+        sheet_name = f'{symbol_name}_日统计'
+        stats_df.to_excel(writer, sheet_name=sheet_name, index=False)
+        ws = writer.sheets[sheet_name]
+        style_excel_header(ws)
+        style_data_cells(ws)
+        auto_adjust_column_width(ws)
+
+
+def create_detailed_consecutive_stats_sheets(conn, writer):
+    """创建详细连续统计工作表"""
+    print("\n【连续统计详细】")
+    
+    # 年份范围
+    years = [2019, 2020, 2021, 2022, 2023, 2024, 2025]
+    
+    # 处理每个交易对
+    for symbol_name in ['BTCUSDT', 'ETHUSDT']:
+        print(f"生成工作表: {symbol_name}_连续统计详细...")
+        
+        # 获取日数据用于连续统计
+        df_daily = get_daily_data_with_pattern(conn, symbol_name)
+        if df_daily.empty:
+            print(f"  {symbol_name} 没有数据")
+            continue
+        
+        _, detailed_stats = calculate_consecutive_stats(df_daily)
+        
+        # 创建详细统计表
+        stats_data = []
+        
+        # 按年份统计
+        for year in years:
+            # D→X连续（同方向）
+            d_up_x_up = detailed_stats['D上_X上'].get(year, 0)
+            d_down_x_down = detailed_stats['D下_X下'].get(year, 0)
+            if d_up_x_up > 0 or d_down_x_down > 0:
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D→X连续',
+                    '具体分类': 'D为[向上突破]时，X为[向上突破]',
+                    '次数': d_up_x_up
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D→X连续',
+                    '具体分类': 'D为[向下突破]时，X为[向下突破]',
+                    '次数': d_down_x_down
+                })
+            
+            # D→X连续反方向
+            d_up_x_down = detailed_stats['D上_X下'].get(year, 0)
+            d_up_x_range = detailed_stats['D上_X区间'].get(year, 0)
+            d_down_x_up = detailed_stats['D下_X上'].get(year, 0)
+            d_down_x_range = detailed_stats['D下_X区间'].get(year, 0)
+            if d_up_x_down > 0 or d_up_x_range > 0 or d_down_x_up > 0 or d_down_x_range > 0:
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D→X连续反方向',
+                    '具体分类': 'D为[向上突破]时，X为[向下突破]',
+                    '次数': d_up_x_down
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D→X连续反方向',
+                    '具体分类': 'D为[向上突破]时，X为[在区间内]',
+                    '次数': d_up_x_range
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D→X连续反方向',
+                    '具体分类': 'D为[向下突破]时，X为[向上突破]',
+                    '次数': d_down_x_up
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D→X连续反方向',
+                    '具体分类': 'D为[向下突破]时，X为[在区间内]',
+                    '次数': d_down_x_range
+                })
+            
+            # D弱→X强
+            d_range_x_up = detailed_stats['D区间_X上'].get(year, 0)
+            d_range_x_down = detailed_stats['D区间_X下'].get(year, 0)
+            d_weak_x_strong_total = d_range_x_up + d_range_x_down
+            if d_weak_x_strong_total > 0:
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'D弱→X强',
+                    '具体分类': 'D为[在区间内]时，X为[向上突破]或[向下突破]',
+                    '次数': d_weak_x_strong_total
+                })
+            
+            # X→A连续
+            x_up_a_range = detailed_stats['X上_A区间'].get(year, 0)
+            x_down_a_range = detailed_stats['X下_A区间'].get(year, 0)
+            x_double_a_range = detailed_stats['X双_A区间'].get(year, 0)
+            if x_up_a_range > 0 or x_down_a_range > 0 or x_double_a_range > 0:
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'X→A连续',
+                    '具体分类': 'X为[向上突破]时，A为[在区间内]',
+                    '次数': x_up_a_range
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'X→A连续',
+                    '具体分类': 'X为[向下突破]时，A为[在区间内]',
+                    '次数': x_down_a_range
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'X→A连续',
+                    '具体分类': 'X为[同时向上和向下突破]时，A为[在区间内]',
+                    '次数': x_double_a_range
+                })
+            
+            # X弱→A强
+            x_up_a_double = detailed_stats['X上_A双'].get(year, 0)
+            x_down_a_double = detailed_stats['X下_A双'].get(year, 0)
+            if x_up_a_double > 0 or x_down_a_double > 0:
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'X弱→A强',
+                    '具体分类': 'X为[向上突破]时，A为[同时向上和向下突破]',
+                    '次数': x_up_a_double
+                })
+                stats_data.append({
+                    '年份': year,
+                    '统计类型': 'X弱→A强',
+                    '具体分类': 'X为[向下突破]时，A为[同时向上和向下突破]',
+                    '次数': x_down_a_double
+                })
+        
+        # 添加总计行
+        # D→X连续（同方向）
+        d_up_x_up_total = sum(detailed_stats['D上_X上'].values())
+        d_down_x_down_total = sum(detailed_stats['D下_X下'].values())
+        if d_up_x_up_total > 0 or d_down_x_down_total > 0:
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D→X连续',
+                '具体分类': 'D为[向上突破]时，X为[向上突破]',
+                '次数': d_up_x_up_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D→X连续',
+                '具体分类': 'D为[向下突破]时，X为[向下突破]',
+                '次数': d_down_x_down_total
+            })
+        
+        # D→X连续反方向
+        d_up_x_down_total = sum(detailed_stats['D上_X下'].values())
+        d_up_x_range_total = sum(detailed_stats['D上_X区间'].values())
+        d_down_x_up_total = sum(detailed_stats['D下_X上'].values())
+        d_down_x_range_total = sum(detailed_stats['D下_X区间'].values())
+        if d_up_x_down_total > 0 or d_up_x_range_total > 0 or d_down_x_up_total > 0 or d_down_x_range_total > 0:
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D→X连续反方向',
+                '具体分类': 'D为[向上突破]时，X为[向下突破]',
+                '次数': d_up_x_down_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D→X连续反方向',
+                '具体分类': 'D为[向上突破]时，X为[在区间内]',
+                '次数': d_up_x_range_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D→X连续反方向',
+                '具体分类': 'D为[向下突破]时，X为[向上突破]',
+                '次数': d_down_x_up_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D→X连续反方向',
+                '具体分类': 'D为[向下突破]时，X为[在区间内]',
+                '次数': d_down_x_range_total
+            })
+        
+        # D弱→X强
+        d_weak_x_strong_total = sum(detailed_stats['D区间_X上'].values()) + sum(detailed_stats['D区间_X下'].values())
+        if d_weak_x_strong_total > 0:
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'D弱→X强',
+                '具体分类': 'D为[在区间内]时，X为[向上突破]或[向下突破]',
+                '次数': d_weak_x_strong_total
+            })
+        
+        # X→A连续
+        x_up_a_range_total = sum(detailed_stats['X上_A区间'].values())
+        x_down_a_range_total = sum(detailed_stats['X下_A区间'].values())
+        x_double_a_range_total = sum(detailed_stats['X双_A区间'].values())
+        if x_up_a_range_total > 0 or x_down_a_range_total > 0 or x_double_a_range_total > 0:
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'X→A连续',
+                '具体分类': 'X为[向上突破]时，A为[在区间内]',
+                '次数': x_up_a_range_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'X→A连续',
+                '具体分类': 'X为[向下突破]时，A为[在区间内]',
+                '次数': x_down_a_range_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'X→A连续',
+                '具体分类': 'X为[同时向上和向下突破]时，A为[在区间内]',
+                '次数': x_double_a_range_total
+            })
+        
+        # X弱→A强
+        x_up_a_double_total = sum(detailed_stats['X上_A双'].values())
+        x_down_a_double_total = sum(detailed_stats['X下_A双'].values())
+        if x_up_a_double_total > 0 or x_down_a_double_total > 0:
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'X弱→A强',
+                '具体分类': 'X为[向上突破]时，A为[同时向上和向下突破]',
+                '次数': x_up_a_double_total
+            })
+            stats_data.append({
+                '年份': '总计',
+                '统计类型': 'X弱→A强',
+                '具体分类': 'X为[向下突破]时，A为[同时向上和向下突破]',
+                '次数': x_down_a_double_total
+            })
+        
+        # 创建DataFrame
+        stats_df = pd.DataFrame(stats_data)
+        
+        # 写入Excel
+        sheet_name = f'{symbol_name}_连续统计详细'
+        stats_df.to_excel(writer, sheet_name=sheet_name, index=False)
+        ws = writer.sheets[sheet_name]
+        style_excel_header(ws)
+        style_data_cells(ws)
+        auto_adjust_column_width(ws)
+
+
 def export_combined_report(conn):
     """导出合并报告（月度模式 + 周度模式）"""
     print("=" * 60)
@@ -553,6 +1213,12 @@ def export_combined_report(conn):
         style_excel_header(ws)
         style_data_cells(ws)
         auto_adjust_column_width(ws)
+        
+        # ==================== 第三部分：日统计 ====================
+        create_statistics_sheets(conn, writer)
+        
+        # ==================== 第四部分：连续统计详细 ====================
+        create_detailed_consecutive_stats_sheets(conn, writer)
     
     print(f"\n合并报告已保存: {excel_path}")
     
