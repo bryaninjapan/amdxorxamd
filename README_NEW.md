@@ -1,10 +1,10 @@
 # AMDX/XAMD 模式分析系统（增强版）
 
-📊 分析比特币(BTC)和以太坊(ETH)的价格模式，支持多交易所数据
+📊 分析比特币(BTC)和以太坊(ETH)的价格模式，支持多交易所数据、模式预测和回测功能
 
 ## 概述
 
-本系统用于判断每个月第一周是属于 **AMDX** 还是 **XAMD** 模式，基于与前一周的价格区间比较。同时支持周度模式分析。
+本系统用于判断每个月第一周是属于 **AMDX** 还是 **XAMD** 模式，基于与前一周的价格区间比较。同时支持周度模式分析、模式预测和交易策略回测。
 
 ### 模式定义
 
@@ -52,9 +52,26 @@
 - ✅ 数据质量检查
 - ✅ 突破方向和幅度记录
 
+### 预测功能 🆕
+- ✅ **历史频率法**：基于历史模式出现频率预测
+- ✅ **季节性分析**：按月份统计模式转换概率
+- ✅ **马尔可夫链**：识别连续模式序列
+- ✅ **综合预测**：多种方法加权平均
+- ✅ **准确率验证**：计算历史预测准确率
+
+### 回测功能 🆕
+- ✅ **简单跟随策略**：识别到XAMD做多，AMDX做空
+- ✅ **反转策略**：基于历史统计预期反转
+- ✅ **多周期结合策略**：月度+周度模式综合判断
+- ✅ **完整回测指标**：收益率、胜率、最大回撤、夏普比率
+- ✅ **权益曲线**：可视化资金变化
+- ✅ **交易明细**：每笔交易的详细记录
+
 ### 报告生成
 - ✅ 生成 Excel 和 PDF 格式报告
 - ✅ **合并报告**：月度模式 + 周度模式一体化分析
+- ✅ **NEW** 预测报告：模式预测结果和置信度
+- ✅ **NEW** 回测报告：策略对比和性能分析
 - ✅ 每日自动更新数据
 
 ## 快速开始
@@ -83,8 +100,17 @@ python run_all.py --force
 # 只生成报告
 python run_all.py --report
 
+# 运行模式预测
+python run_all.py --predict
+
+# 运行回测分析
+python run_all.py --backtest
+
 # 获取Bitstamp数据
 python run_all.py --bitstamp
+
+# 完整运行（包含预测和回测）
+python run_all.py --force --predict --backtest
 ```
 
 ### 3. 分步运行
@@ -114,6 +140,11 @@ python scripts/generate_reports.py
 # 步骤8: 生成合并报告
 python scripts/export_combined_report.py
 
+# 步骤9: 模式预测（NEW）
+python scripts/predict_patterns.py
+
+# 步骤10: 回测分析（NEW）
+python scripts/generate_backtest_reports.py
 ```
 
 ## 项目结构
@@ -139,11 +170,15 @@ AMDX/
 │   ├── generate_reports.py           # 月度模式报告生成
 │   ├── export_all_data_to_excel.py   # 完整数据导出
 │   ├── export_weekly_patterns_to_excel.py # 周度模式报告生成
-│   └── export_combined_report.py    # 合并报告生成
+│   ├── export_combined_report.py    # 合并报告生成
+│   ├── predict_patterns.py           # 模式预测（NEW）
+│   ├── backtest_engine.py            # 回测引擎（NEW）
+│   └── generate_backtest_reports.py # 回测报告生成（NEW）
 │
 ├── reports/
 │   ├── excel/              # Excel报告
 │   │   ├── 完整分析报告_最新.xlsx
+│   │   ├── 回测分析报告_最新.xlsx（NEW）
 │   │   └── ...
 │   ├── pdf/                # PDF报告
 │   └── data/               # JSON数据
@@ -179,7 +214,29 @@ AMDX/
 - **BTC日数据**: BTC每日数据（含周度模式、走势明细、突破幅度）
 - **ETH日数据**: ETH每日数据（含周度模式、走势明细、突破幅度）
 
-### 2. 其他报告
+### 2. 模式预测报告 🆕
+
+运行 `python run_all.py --predict` 生成，包含：
+- **下一周/月预测**: 预测下一个周期的模式
+- **预测置信度**: 基于多种方法的综合置信度
+- **历史准确率**: 历史预测的验证结果
+- **方法对比**: 不同预测方法的结果对比
+
+### 3. 回测分析报告 🆕 (`reports/excel/回测分析报告_最新.xlsx`)
+
+运行 `python run_all.py --backtest` 生成，包含：
+- **策略总览**: 所有策略的总体表现对比
+- **交易明细**: 每笔交易的详细记录
+- **权益曲线**: 资金变化曲线数据
+- **风险指标**: 夏普比率、最大回撤、卡玛比率
+- **策略对比**: 三种策略的收益率和风险对比
+
+**回测策略说明：**
+1. **简单跟随策略**: XAMD→做多，AMDX→做空
+2. **反转策略**: 基于历史统计预期反转
+3. **多周期结合策略**: 月度+周度模式综合判断
+
+### 4. 其他报告
 
 - **月度模式报告** (`reports/excel/AMDX_XAMD_分析报告_最新.xlsx`): 仅月度模式分析
 - **周度模式报告** (`reports/excel/周度模式分析_最新.xlsx`): 仅周度模式分析
@@ -262,6 +319,34 @@ SYMBOLS = [
 
 然后重新运行 `python run_all.py --force`
 
+### Q: 如何查看预测结果？
+
+```bash
+# 运行预测
+python run_all.py --predict
+
+# 或单独运行
+python scripts/predict_patterns.py
+```
+
+预测结果会显示在终端，包括：
+- 下一周/月的预测模式
+- 预测置信度
+- 使用的预测方法
+- 历史准确率
+
+### Q: 如何运行回测？
+
+```bash
+# 运行回测
+python run_all.py --backtest
+
+# 或单独运行
+python scripts/generate_backtest_reports.py
+```
+
+回测报告保存在 `reports/excel/回测分析报告_最新.xlsx`
+
 ### Q: Bitstamp数据如何获取？
 
 ```bash
@@ -279,6 +364,12 @@ python scripts/fetch_bitstamp_data.py
 3. 查看错误日志
 4. 尝试手动运行各个步骤排查问题
 
+### Q: 如何修改回测策略参数？
+
+编辑 `scripts/backtest_engine.py` 中的策略类，修改：
+- 仓位大小 (`size` 参数)
+- 开仓条件
+- 止损止盈设置
 
 ## GitHub Actions 自动更新
 
@@ -315,6 +406,8 @@ python scripts/fetch_bitstamp_data.py
 ### v2.0 (2025-12-12) 🆕
 - ✅ 新增 Bitstamp 交易所支持
 - ✅ 新增 BTC/USD 现货数据
+- ✅ 新增模式预测功能（3种预测方法）
+- ✅ 新增回测功能（3种交易策略）
 - ✅ 新增小时数据表支持
 - ✅ 优化数据库结构
 - ✅ 增强主运行脚本

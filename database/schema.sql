@@ -122,6 +122,27 @@ INSERT OR IGNORE INTO system_config (key, value, description) VALUES
 ('data_version', '1.0', '数据版本'),
 ('schema_version', '1.0', '数据库结构版本');
 
+-- ==================== 小时数据表 ====================
+CREATE TABLE IF NOT EXISTS hourly_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,
+    timestamp INTEGER NOT NULL,                -- Unix时间戳（秒）
+    datetime DATETIME NOT NULL,                -- 日期时间（UTC+9）
+    open DECIMAL(20, 8) NOT NULL,              -- 开盘价
+    high DECIMAL(20, 8) NOT NULL,              -- 最高价
+    low DECIMAL(20, 8) NOT NULL,               -- 最低价
+    close DECIMAL(20, 8) NOT NULL,             -- 收盘价
+    volume DECIMAL(20, 8),                      -- 成交量
+    data_source TEXT DEFAULT 'api',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (symbol_id) REFERENCES symbols(id),
+    UNIQUE(symbol_id, timestamp)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hourly_symbol_timestamp ON hourly_data(symbol_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_hourly_datetime ON hourly_data(datetime);
+
 -- ==================== 日数据表 ====================
 CREATE TABLE IF NOT EXISTS daily_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
