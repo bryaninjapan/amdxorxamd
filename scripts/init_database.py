@@ -41,15 +41,23 @@ def init_database():
     # 插入交易对配置
     print("\n初始化交易对配置...")
     for symbol_config in SYMBOLS:
+        exchange = symbol_config.get('exchange', 'binance')  # 从配置读取，默认 binance
+        
+        # 先尝试插入
         cursor.execute("""
             INSERT OR IGNORE INTO symbols (symbol, display_name, exchange)
-            VALUES (?, ?, 'binance')
-        """, (symbol_config['name'], symbol_config['display_name']))
+            VALUES (?, ?, ?)
+        """, (symbol_config['name'], symbol_config['display_name'], exchange))
         
         if cursor.rowcount > 0:
-            print(f"  ✓ 添加交易对: {symbol_config['name']}")
+            print(f"  ✓ 添加交易对: {symbol_config['name']} (交易所: {exchange})")
         else:
-            print(f"  - 交易对已存在: {symbol_config['name']}")
+            # 如果已存在，更新 exchange 字段（修复旧数据）
+            cursor.execute("""
+                UPDATE symbols SET exchange = ?, display_name = ?
+                WHERE symbol = ?
+            """, (exchange, symbol_config['display_name'], symbol_config['name']))
+            print(f"  - 交易对已存在: {symbol_config['name']} (已更新交易所为: {exchange})")
     
     conn.commit()
     
